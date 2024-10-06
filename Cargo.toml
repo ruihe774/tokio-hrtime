@@ -7,7 +7,14 @@ edition = "2021"
 cfg-if = "1"
 libc = "0.2"
 pin-project-lite = "0.2"
-tokio = { version = "1", default-features = false, features = ["net"] }
 
 [features]
 test = ["tokio/rt", "tokio/macros"]
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+tokio = { version = "1", default-features = false, features = ["net"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+tokio = { version = "1", default-features = false }
+tokio-util = "0.7"
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_Security"] }

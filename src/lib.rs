@@ -13,6 +13,9 @@ cfg_if::cfg_if! {
     if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
         mod timerfd;
         use timerfd::*;
+    } else if #[cfg(windows)] {
+        mod waitable;
+        use waitable::*;
     } else {
         compile_error!("unsupported platform");
     }
