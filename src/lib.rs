@@ -10,7 +10,7 @@ use pin_project_lite::pin_project;
 mod utils;
 
 cfg_if::cfg_if! {
-    if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
+    if #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "android"))] {
         mod timerfd;
         use timerfd::*;
     } else if #[cfg(windows)] {

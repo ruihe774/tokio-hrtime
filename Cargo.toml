@@ -11,10 +11,10 @@ pin-project-lite = "0.2"
 [features]
 test = ["tokio/rt", "tokio/macros"]
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+[target.'cfg(unix)'.dependencies]
 tokio = { version = "1", default-features = false, features = ["net"] }
 
-[target.'cfg(target_os = "windows")'.dependencies]
+[target.'cfg(windows)'.dependencies]
 tokio = { version = "1", default-features = false }
 tokio-util = "0.7"
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_Security"] }
