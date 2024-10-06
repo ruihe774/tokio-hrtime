@@ -115,3 +115,5 @@ impl Drop for Timer {
         destroy_waitable_timer(self.wt, self.wh);
     }
 }
+
+pub const TIMER_REMEMBER_EXPIRATIONS: bool = true;

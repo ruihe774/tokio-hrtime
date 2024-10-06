@@ -7,8 +7,8 @@ use std::slice;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
+use tokio::io::Interest;
 
 use crate::utils::{cvt, instant_to_duration};
 
@@ -93,3 +93,5 @@ impl Timer {
         }
     }
 }
+
+pub const TIMER_REMEMBER_EXPIRATIONS: bool = true;
