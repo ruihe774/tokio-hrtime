@@ -7,6 +7,7 @@ use std::slice;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 
 use crate::utils::{cvt, instant_to_duration};
@@ -35,7 +36,7 @@ fn make_timerfd(timerspec: libc::itimerspec, absolute: bool) -> AsyncFd<File> {
     set_timefd(fd, timerspec, absolute);
 
     let file = unsafe { File::from_raw_fd(fd) };
-    AsyncFd::new(file).unwrap()
+    AsyncFd::with_interest(file, Interest::READABLE).unwrap()
 }
 
 fn duration_to_timespec(t: Duration) -> libc::timespec {
@@ -67,11 +68,7 @@ impl Timer {
     }
 
     pub fn reset(&mut self, deadline: Instant, interval: Option<Duration>) {
-        set_timefd(
-            self.0.get_ref().as_raw_fd(),
-            make_timerspec(deadline, interval),
-            true,
-        )
+        set_timefd(self.0.as_raw_fd(), make_timerspec(deadline, interval), true)
     }
 
     pub fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<u64> {
