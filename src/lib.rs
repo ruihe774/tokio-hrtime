@@ -212,8 +212,21 @@ impl Interval {
     }
 
     pub fn reset_at(&mut self, deadline: Instant) {
-        self.timer.reset(deadline, Some(self.period));
-        self.expirations = 0;
+        let now = Instant::now();
+        if now < deadline {
+            self.expirations = 0;
+            self.timer.reset(deadline, Some(self.period));
+        } else {
+            let past = u64::try_from((now - deadline).as_nanos()).unwrap();
+            let divider = u64::try_from(self.period.as_nanos()).unwrap();
+            self.expirations = past / divider + 1;
+            self.timer.reset(
+                (now - Duration::from_nanos(past % divider))
+                    .checked_add(self.period)
+                    .unwrap(),
+                Some(self.period),
+            )
+        }
     }
 
     pub fn missed_tick_behavior(&self) -> MissedTickBehavior {
@@ -316,5 +329,65 @@ mod tests {
             let elapsed = start.elapsed();
             assert!(elapsed.abs_diff(duration * i) < TOLERANCE * i);
         }
+    }
+
+    #[tokio::test]
+    async fn test_interval_burst() {
+        let start = Instant::now();
+        let duration = Duration::from_millis(10);
+        let mut iv = interval(duration);
+
+        sleep(duration * 3).await;
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let elapsed = start.elapsed();
+        assert!(elapsed.abs_diff(duration * 4) < TOLERANCE * 5);
+    }
+
+    #[tokio::test]
+    async fn test_interval_skip() {
+        let start = Instant::now();
+        let duration = Duration::from_millis(10);
+        let mut iv = interval(duration);
+        iv.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        sleep(duration * 3).await;
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.abs_diff(duration * 4) < TOLERANCE * 5
+                || elapsed.abs_diff(duration * 5) < TOLERANCE * 5
+        );
+    }
+
+    #[tokio::test]
+    async fn test_interval_reset() {
+        let start = Instant::now();
+        let duration = Duration::from_millis(10);
+        let mut iv = interval(duration);
+
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let elapsed = start.elapsed();
+        assert!(elapsed.abs_diff(duration * 2) < TOLERANCE * 2);
+
+        iv.reset_immediately();
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let elapsed = start.elapsed();
+        assert!(elapsed.abs_diff(duration * 4) < TOLERANCE * 4);
+
+        iv.reset_at(start + Duration::from_millis(25));
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let elapsed = start.elapsed();
+        assert!(elapsed.abs_diff(Duration::from_millis(45)) < TOLERANCE * 5);
     }
 }
