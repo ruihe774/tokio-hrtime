@@ -404,11 +404,13 @@ mod tests {
         let elapsed = start.elapsed();
         assert!(elapsed.abs_diff(duration * 4) < TOLERANCE * 4);
 
-        iv.reset_at(start + Duration::from_millis(25));
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(Duration::from_millis(45)) < TOLERANCE * 5);
+        if TIMER_REMEMBER_EXPIRATIONS {
+            iv.reset_at(start + Duration::from_millis(25));
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(Duration::from_millis(45)) < TOLERANCE * 5);
+        }
     }
 }
