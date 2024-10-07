@@ -28,7 +28,7 @@ fn make_timerfd(timerspec: libc::itimerspec, absolute: bool) -> AsyncFd<File> {
     let fd = cvt(unsafe {
         libc::timerfd_create(
             libc::CLOCK_MONOTONIC,
-            libc::TFD_NONBLOCK | libc::TFD_NONBLOCK,
+            libc::TFD_CLOEXEC | libc::TFD_NONBLOCK,
         )
     })
     .expect("failed to create timerfd");
@@ -87,6 +87,7 @@ impl Timer {
                         Poll::Ready(unsafe { expirations.assume_init() })
                     }
                     Err(ref e) if e.raw_os_error() == Some(libc::EAGAIN) => Poll::Pending,
+                    #[allow(clippy::unnecessary_literal_unwrap)]
                     Err(e) => Err(e).expect("failed to read from timerfd"),
                 }
             }
