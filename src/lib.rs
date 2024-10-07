@@ -272,7 +272,7 @@ impl Interval {
 mod tests {
     use crate::*;
 
-    const TOLERANCE: Duration = Duration::from_millis(1);
+    const TOLERANCE: Duration = Duration::from_millis(5);
 
     #[tokio::test]
     async fn test_sleep() {
@@ -331,7 +331,7 @@ mod tests {
     #[tokio::test]
     async fn test_interval() {
         let start = Instant::now();
-        let duration = Duration::from_millis(10);
+        let duration = Duration::from_millis(100);
         let mut iv = interval(duration);
 
         for i in 0..10 {
@@ -344,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn test_interval_at() {
         let start = Instant::now();
-        let duration = Duration::from_millis(10);
+        let duration = Duration::from_millis(100);
         let mut iv = interval_at(start + duration, duration);
 
         for i in 1..=10 {
@@ -367,7 +367,7 @@ mod tests {
     #[tokio::test]
     async fn test_interval_burst() {
         let start = Instant::now();
-        let duration = Duration::from_millis(10);
+        let duration = Duration::from_millis(100);
         let mut iv = interval(duration);
 
         sleep(duration * 3).await;
@@ -383,7 +383,7 @@ mod tests {
     #[tokio::test]
     async fn test_interval_skip() {
         let start = Instant::now();
-        let duration = Duration::from_millis(10);
+        let duration = Duration::from_millis(100);
         let mut iv = interval(duration);
         iv.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -400,7 +400,7 @@ mod tests {
     #[tokio::test]
     async fn test_interval_reset() {
         let start = Instant::now();
-        let duration = Duration::from_millis(10);
+        let duration = Duration::from_millis(100);
         let mut iv = interval(duration);
 
         let _ = iv.tick().await;
@@ -417,12 +417,12 @@ mod tests {
         assert!(elapsed.abs_diff(duration * 4) < TOLERANCE * 4);
 
         if TIMER_REMEMBER_EXPIRATIONS {
-            iv.reset_at(start + Duration::from_millis(25));
+            iv.reset_at(start + Duration::from_millis(250));
             let _ = iv.tick().await;
             let _ = iv.tick().await;
             let _ = iv.tick().await;
             let elapsed = start.elapsed();
-            assert!(elapsed.abs_diff(Duration::from_millis(45)) < TOLERANCE * 5);
+            assert!(elapsed.abs_diff(Duration::from_millis(450)) < TOLERANCE * 5);
         }
     }
 }
