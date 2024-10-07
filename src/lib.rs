@@ -150,6 +150,10 @@ impl<F> Timeout<F> {
         &mut self.future
     }
 
+    pub fn get_pin_mut(self: Pin<&mut Self>) -> Pin<&mut F> {
+        self.project().future
+    }
+
     pub fn into_inner(self) -> F {
         self.future
     }
