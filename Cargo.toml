@@ -2,16 +2,23 @@
 name = "tokio-hrtime"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.81"
+license = "BSL-1.0"
+authors = ["Misaki Kasumi <misakikasumi@outlook.com>"]
+repository = "https://github.com/ruihe774/tokio-hrtime"
+description = "Hires timers for tokio"
+keywords = ["async", "timer", "tokio"]
+categories = ["asynchronous", "os"]
 
 [dependencies]
 cfg-if = "1"
-libc = "0.2"
 pin-project-lite = "0.2"
 
 [features]
 test = ["tokio/rt", "tokio/macros"]
 
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
 tokio = { version = "1", default-features = false, features = ["net"] }
 
 [target.'cfg(windows)'.dependencies]
