@@ -178,11 +178,7 @@ pub fn interval_at(start: Instant, period: Duration) -> Interval {
         timer: Timer::new(start, Some(period)),
         period,
         expirations: 0,
-        behavior: if TIMER_REMEMBER_EXPIRATIONS {
-            MissedTickBehavior::Burst
-        } else {
-            MissedTickBehavior::Skip
-        },
+        behavior: MissedTickBehavior::Burst,
     }
 }
 
@@ -260,9 +256,6 @@ impl Interval {
     pub fn set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
         if behavior == MissedTickBehavior::Delay {
             unimplemented!("MissedTickBehavior::Delay is not implemented yet");
-        }
-        if !TIMER_REMEMBER_EXPIRATIONS && behavior == MissedTickBehavior::Burst {
-            unimplemented!("MissedTickBehavior::Burst is not supported on this platform");
         }
         self.behavior = behavior;
     }
@@ -364,16 +357,6 @@ mod tests {
         }
     }
 
-    #[cfg_attr(
-        any(
-            target_os = "freebsd",
-            target_os = "netbsd",
-            target_os = "openbsd",
-            target_os = "dragonfly",
-            target_vendor = "apple"
-        ),
-        ignore
-    )]
     #[tokio::test]
     async fn test_interval_burst() {
         let start = Instant::now();
@@ -426,13 +409,11 @@ mod tests {
         let elapsed = start.elapsed();
         assert!(elapsed.abs_diff(duration * 4) < TOLERANCE * 4);
 
-        if TIMER_REMEMBER_EXPIRATIONS {
-            iv.reset_at(start + Duration::from_millis(250));
-            let _ = iv.tick().await;
-            let _ = iv.tick().await;
-            let _ = iv.tick().await;
-            let elapsed = start.elapsed();
-            assert!(elapsed.abs_diff(Duration::from_millis(450)) < TOLERANCE * 5);
-        }
+        iv.reset_at(start + Duration::from_millis(250));
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let _ = iv.tick().await;
+        let elapsed = start.elapsed();
+        assert!(elapsed.abs_diff(Duration::from_millis(450)) < TOLERANCE * 5);
     }
 }
