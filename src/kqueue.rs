@@ -10,7 +10,7 @@ use tokio::io::Interest;
 use crate::utils::{cvt, instant_to_duration};
 
 cfg_if::cfg_if! {
-    if #[cfg(any(target_os = "ios", target_os = "macos"))] {
+    if #[cfg(target_vendor = "apple")] {
         #[allow(deprecated)]
         fn add_timer_to_kqueue(kq: libc::c_int, id: usize, duration: i64, oneshot: bool) {
             let mut ti = std::mem::MaybeUninit::<libc::mach_timebase_info>::uninit();
