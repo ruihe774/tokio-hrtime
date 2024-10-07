@@ -16,6 +16,7 @@ pin-project-lite = "0.2"
 
 [features]
 test = ["tokio/rt", "tokio/macros"]
+test-hires = ["test"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

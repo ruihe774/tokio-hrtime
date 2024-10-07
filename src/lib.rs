@@ -272,7 +272,13 @@ impl Interval {
 mod tests {
     use crate::*;
 
-    const TOLERANCE: Duration = Duration::from_millis(5);
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "test-hires")] {
+            const TOLERANCE: Duration = Duration::from_millis(1);
+        } else {
+            const TOLERANCE: Duration = Duration::from_millis(5);
+        }
+    }
 
     #[tokio::test]
     async fn test_sleep() {
