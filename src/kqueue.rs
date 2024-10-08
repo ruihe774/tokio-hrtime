@@ -147,5 +147,3 @@ impl Timer {
         }
     }
 }
-
-pub const TIMER_REMEMBER_EXPIRATIONS: bool = true;
