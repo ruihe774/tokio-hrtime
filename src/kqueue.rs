@@ -54,7 +54,7 @@ cfg_if::cfg_if! {
     }
 }
 
-fn wait_kqueue(kq: libc::c_int) -> bool {
+fn wait_kqueue(kq: libc::c_int) -> Option<isize> {
     let mut eventlist = [libc::kevent {
         ident: 0,
         filter: 0,
@@ -67,7 +67,7 @@ fn wait_kqueue(kq: libc::c_int) -> bool {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    cvt(unsafe {
+    (cvt(unsafe {
         libc::kevent(
             kq,
             ptr::null(),
@@ -78,7 +78,8 @@ fn wait_kqueue(kq: libc::c_int) -> bool {
         )
     })
     .expect("failed to wait on kqueue")
-        != 0
+        != 0)
+        .then_some(eventlist[0].data)
 }
 
 fn create_kqueue() -> AsyncFd<File> {
@@ -129,7 +130,7 @@ impl Timer {
             Poll::Ready(r) => {
                 let mut guard = r.expect("failed to poll kqueue");
                 guard.clear_ready();
-                if wait_kqueue(guard.get_inner().as_raw_fd()) {
+                if let Some(expirations) = wait_kqueue(guard.get_inner().as_raw_fd()) {
                     if let Some(interval) = self.interval.take() {
                         add_timer_to_kqueue(
                             self.kq.as_raw_fd(),
@@ -138,7 +139,7 @@ impl Timer {
                             false,
                         );
                     }
-                    Poll::Ready(1)
+                    Poll::Ready(expirations as u64)
                 } else {
                     Poll::Pending
                 }
@@ -147,4 +148,4 @@ impl Timer {
     }
 }
 
-pub const TIMER_REMEMBER_EXPIRATIONS: bool = false;
+pub const TIMER_REMEMBER_EXPIRATIONS: bool = true;
