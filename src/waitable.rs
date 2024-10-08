@@ -1,4 +1,3 @@
-use std::cmp::max;
 use std::ffi;
 use std::mem;
 use std::ptr;
@@ -37,22 +36,24 @@ fn create_waitable_timer() -> HANDLE {
     .expect("failed to create waitable timer")
 }
 
-fn start_waitable_timer(wt: HANDLE, cb: &Box<dyn FnMut() + Send>, oneshot: bool) -> HANDLE {
+unsafe fn start_waitable_timer(
+    wt: HANDLE,
+    cb: *mut Box<dyn FnMut() + Send>,
+    oneshot: bool,
+) -> HANDLE {
     let mut wh = HANDLE::default();
-    unsafe {
-        RegisterWaitForSingleObject(
-            ptr::from_mut(&mut wh),
-            wt,
-            Some(timer_callback),
-            Some(ptr::from_ref(cb) as _),
-            INFINITE,
-            if oneshot {
-                Threading::WT_EXECUTEONLYONCE | Threading::WT_EXECUTEINWAITTHREAD
-            } else {
-                Threading::WT_EXECUTEINWAITTHREAD
-            },
-        )
-    }
+    RegisterWaitForSingleObject(
+        ptr::from_mut(&mut wh),
+        wt,
+        Some(timer_callback),
+        Some(cb as _),
+        INFINITE,
+        if oneshot {
+            Threading::WT_EXECUTEONLYONCE | Threading::WT_EXECUTEINWAITTHREAD
+        } else {
+            Threading::WT_EXECUTEINWAITTHREAD
+        },
+    )
     .expect("failed to watch waitable timer");
     wh
 }
@@ -69,13 +70,12 @@ fn destroy_waitable_timer(wt: HANDLE, wh: HANDLE) {
 }
 
 fn make_duetime(deadline: Instant) -> i64 {
-    -i64::try_from(max(
+    -i64::try_from(
         deadline
             .saturating_duration_since(Instant::now())
             .as_nanos()
-            / 100,
-        1,
-    ))
+            .div_ceil(100),
+    )
     .unwrap()
 }
 
@@ -84,39 +84,31 @@ pub struct Timer {
     wt: HANDLE,
     wh: HANDLE,
     cb: Box<Box<dyn FnMut() + Send>>,
-    deadline: Box<Instant>,
     waiter: PollSemaphore,
 }
 
 impl Timer {
     pub fn new(deadline: Option<Instant>, interval: Option<Duration>) -> Timer {
         let mut deadline =
-            Box::new(deadline.unwrap_or_else(|| Instant::now() + interval.unwrap_or_default()));
-        let ts = make_duetime(*deadline);
+            deadline.unwrap_or_else(|| Instant::now() + interval.unwrap_or_default());
+        let ts = make_duetime(deadline);
         let notify = Arc::new(Semaphore::new(0));
         let waiter = PollSemaphore::new(notify.clone());
         let wt = create_waitable_timer();
         set_waitable_timer(wt, ts);
         let cwt = wt.0 as usize;
-        let pdl = ptr::from_mut(deadline.as_mut()) as usize;
-        let cb = Box::new(Box::<dyn FnMut() + Send>::from(Box::new(move || {
+        let mut cb = Box::new(Box::<dyn FnMut() + Send>::from(Box::new(move || {
             notify.add_permits(1);
             if let Some(interval) = interval {
-                let deadline = unsafe { &mut *(pdl as *mut Instant) };
-                *deadline += interval;
+                deadline += interval;
                 let wt = HANDLE(cwt as *mut std::ffi::c_void);
-                let ts = make_duetime(*deadline);
+                let ts = make_duetime(deadline);
                 set_waitable_timer(wt, ts);
             }
         })));
-        let wh = start_waitable_timer(wt, cb.as_ref(), interval.is_none());
-        Timer {
-            wt,
-            wh,
-            cb,
-            deadline,
-            waiter,
-        }
+        let wh =
+            unsafe { start_waitable_timer(wt, ptr::from_mut(cb.as_mut()), interval.is_none()) };
+        Timer { wt, wh, cb, waiter }
     }
 
     pub fn reset(&mut self, deadline: Option<Instant>, interval: Option<Duration>) {

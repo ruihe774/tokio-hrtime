@@ -86,8 +86,7 @@ impl Timer {
                         Poll::Ready(unsafe { expirations.assume_init() })
                     }
                     Err(ref e) if e.raw_os_error() == Some(libc::EAGAIN) => Poll::Pending,
-                    #[allow(clippy::unnecessary_literal_unwrap)]
-                    Err(e) => Err(e).expect("failed to read from timerfd"),
+                    Err(e) => panic!("failed to read from timerfd: {e:?}"),
                 }
             }
         }
