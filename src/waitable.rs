@@ -8,11 +8,11 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Semaphore;
 use tokio_util::sync::PollSemaphore;
-
-use windows::Win32::Foundation::{CloseHandle, BOOLEAN, HANDLE};
+use windows::core::HRESULT;
+use windows::Win32::Foundation::{CloseHandle, BOOLEAN, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
-    self, CreateWaitableTimerExW, RegisterWaitForSingleObject, SetWaitableTimer, UnregisterWait,
-    INFINITE,
+    self, CreateEventW, CreateWaitableTimerExW, RegisterWaitForSingleObject, SetWaitableTimer,
+    UnregisterWaitEx, WaitForSingleObject, INFINITE,
 };
 
 fn set_waitable_timer(wt: HANDLE, ts: i64) {
@@ -58,8 +58,14 @@ fn start_waitable_timer(wt: HANDLE, cb: &Box<dyn FnMut() + Send>, oneshot: bool)
 }
 
 fn destroy_waitable_timer(wt: HANDLE, wh: HANDLE) {
-    let _ = unsafe { UnregisterWait(wh) };
-    let _ = unsafe { CloseHandle(wt) };
+    let eh = unsafe { CreateEventW(None, false, false, None) }.unwrap();
+    match unsafe { UnregisterWaitEx(wh, eh) } {
+        Err(e) if e.code() == HRESULT::from(ERROR_IO_PENDING) => Ok(()),
+        r => r,
+    }
+    .unwrap();
+    assert_eq!(unsafe { WaitForSingleObject(eh, INFINITE) }, WAIT_OBJECT_0);
+    unsafe { CloseHandle(wt) }.unwrap();
 }
 
 fn make_duetime(deadline: Instant) -> i64 {
@@ -84,7 +90,8 @@ pub struct Timer {
 
 impl Timer {
     pub fn new(deadline: Option<Instant>, interval: Option<Duration>) -> Timer {
-        let mut deadline = Box::new(deadline.unwrap_or_else(|| Instant::now() + interval.unwrap_or_default()));
+        let mut deadline =
+            Box::new(deadline.unwrap_or_else(|| Instant::now() + interval.unwrap_or_default()));
         let ts = make_duetime(*deadline);
         let notify = Arc::new(Semaphore::new(0));
         let waiter = PollSemaphore::new(notify.clone());
@@ -103,7 +110,13 @@ impl Timer {
             }
         })));
         let wh = start_waitable_timer(wt, cb.as_ref(), interval.is_none());
-        Timer { wt, wh, cb, deadline, waiter }
+        Timer {
+            wt,
+            wh,
+            cb,
+            deadline,
+            waiter,
+        }
     }
 
     pub fn reset(&mut self, deadline: Option<Instant>, interval: Option<Duration>) {
