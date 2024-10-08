@@ -103,14 +103,23 @@ pub struct Timer {
 }
 
 impl Timer {
-    pub fn new(deadline: Instant, interval: Option<Duration>) -> Timer {
+    pub fn new(deadline: Option<Instant>, mut interval: Option<Duration>) -> Timer {
         let kq = create_kqueue();
-        add_timer_to_kqueue(kq.as_raw_fd(), 1, instant_to_nseconds(deadline), true);
+        if let Some(deadline) = deadline {
+            add_timer_to_kqueue(kq.as_raw_fd(), 1, instant_to_nseconds(deadline), true);
+        } else if let Some(interval) = interval.take() {
+            add_timer_to_kqueue(kq.as_raw_fd(), 1, duration_to_nseconds(interval), false);
+        }
         Timer { kq, interval }
     }
 
-    pub fn reset(&mut self, deadline: Instant, interval: Option<Duration>) {
-        add_timer_to_kqueue(self.kq.as_raw_fd(), 1, instant_to_nseconds(deadline), true);
+    pub fn reset(&mut self, deadline: Option<Instant>, mut interval: Option<Duration>) {
+        let kq = &self.kq;
+        if let Some(deadline) = deadline {
+            add_timer_to_kqueue(kq.as_raw_fd(), 1, instant_to_nseconds(deadline), true);
+        } else if let Some(interval) = interval.take() {
+            add_timer_to_kqueue(kq.as_raw_fd(), 1, duration_to_nseconds(interval), false);
+        }
         self.interval = interval;
     }
 

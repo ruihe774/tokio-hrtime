@@ -50,9 +50,11 @@ fn instant_to_timespec(t: Instant) -> libc::timespec {
     duration_to_timespec(instant_to_duration(t))
 }
 
-fn make_timerspec(deadline: Instant, interval: Option<Duration>) -> libc::itimerspec {
+fn make_timerspec(deadline: Option<Instant>, interval: Option<Duration>) -> libc::itimerspec {
     libc::itimerspec {
-        it_value: instant_to_timespec(deadline),
+        it_value: instant_to_timespec(
+            deadline.unwrap_or_else(|| Instant::now() + interval.unwrap_or_default()),
+        ),
         it_interval: duration_to_timespec(interval.unwrap_or_default()),
     }
 }
@@ -60,11 +62,11 @@ fn make_timerspec(deadline: Instant, interval: Option<Duration>) -> libc::itimer
 pub struct Timer(AsyncFd<File>);
 
 impl Timer {
-    pub fn new(deadline: Instant, interval: Option<Duration>) -> Timer {
+    pub fn new(deadline: Option<Instant>, interval: Option<Duration>) -> Timer {
         Timer(make_timerfd(make_timerspec(deadline, interval), true))
     }
 
-    pub fn reset(&mut self, deadline: Instant, interval: Option<Duration>) {
+    pub fn reset(&mut self, deadline: Option<Instant>, interval: Option<Duration>) {
         set_timefd(self.0.as_raw_fd(), make_timerspec(deadline, interval), true)
     }
 

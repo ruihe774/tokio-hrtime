@@ -45,7 +45,7 @@ pub struct Sleep {
 
 pub fn sleep_until(deadline: Instant) -> Sleep {
     Sleep {
-        timer: Timer::new(deadline, None),
+        timer: Timer::new(Some(deadline), None),
         deadline,
         elapsed: false,
     }
@@ -83,7 +83,7 @@ impl Sleep {
     }
 
     pub fn reset(&mut self, deadline: Instant) {
-        self.timer.reset(deadline, None)
+        self.timer.reset(Some(deadline), None)
     }
 }
 
@@ -175,7 +175,7 @@ pub struct Interval {
 
 pub fn interval_at(start: Instant, period: Duration) -> Interval {
     Interval {
-        timer: Timer::new(start, Some(period)),
+        timer: Timer::new(Some(start), Some(period)),
         period,
         expirations: 0,
         behavior: if TIMER_REMEMBER_EXPIRATIONS {
@@ -187,9 +187,16 @@ pub fn interval_at(start: Instant, period: Duration) -> Interval {
 }
 
 pub fn interval(period: Duration) -> Interval {
-    let mut interval = interval_at(Instant::now().checked_add(period).unwrap(), period);
-    interval.expirations = 1;
-    interval
+    Interval {
+        timer: Timer::new(None, Some(period)),
+        period,
+        expirations: 1,
+        behavior: if TIMER_REMEMBER_EXPIRATIONS {
+            MissedTickBehavior::Burst
+        } else {
+            MissedTickBehavior::Skip
+        },
+    }
 }
 
 struct Tick<'a>(&'a mut Interval);
@@ -224,11 +231,12 @@ impl Interval {
     }
 
     pub fn reset(&mut self) {
-        self.reset_at(Instant::now().checked_add(self.period).unwrap())
+        self.timer.reset(None, Some(self.period));
     }
 
     pub fn reset_immediately(&mut self) {
-        self.reset_at(Instant::now())
+        self.expirations = 1;
+        self.reset();
     }
 
     pub fn reset_after(&mut self, after: Duration) {
@@ -239,15 +247,17 @@ impl Interval {
         let now = Instant::now();
         if now < deadline {
             self.expirations = 0;
-            self.timer.reset(deadline, Some(self.period));
+            self.timer.reset(Some(deadline), Some(self.period));
         } else {
             let past = u64::try_from((now - deadline).as_nanos()).unwrap();
             let divider = u64::try_from(self.period.as_nanos()).unwrap();
             self.expirations = past / divider + 1;
             self.timer.reset(
-                (now - Duration::from_nanos(past % divider))
-                    .checked_add(self.period)
-                    .unwrap(),
+                Some(
+                    (now - Duration::from_nanos(past % divider))
+                        .checked_add(self.period)
+                        .unwrap(),
+                ),
                 Some(self.period),
             )
         }
