@@ -407,7 +407,7 @@ mod tests {
         let mut iv = interval(duration);
         iv.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        sleep(duration * 3).await;
+        sleep(Duration::from_millis(350)).await;
         let _ = iv.tick().await;
         let _ = iv.tick().await;
         let elapsed = start.elapsed();
