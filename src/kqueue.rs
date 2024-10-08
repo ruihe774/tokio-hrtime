@@ -4,12 +4,15 @@ use std::mem;
 use std::ops::DerefMut;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::ptr;
-use std::sync::Mutex;
-use std::task::{Context, Poll, Waker};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
+use tokio::sync::Semaphore;
+
+use tokio_util::sync::PollSemaphore;
 
 use crate::utils::{cvt, instant_to_duration};
 
@@ -102,13 +105,14 @@ fn instant_to_nseconds(instant: Instant) -> i64 {
 
 struct SharedState {
     kq: AsyncFd<File>,
-    timers: BTreeMap<usize, (u64, Option<Waker>, Option<Duration>)>,
+    timers: BTreeMap<usize, (Arc<Semaphore>, Option<Duration>)>,
 }
 
 static SS: Mutex<Option<SharedState>> = Mutex::new(None);
 
 pub struct Timer {
     ident: usize,
+    waiter: PollSemaphore,
 }
 
 impl Timer {
@@ -134,7 +138,11 @@ impl Timer {
                 .find_map(|(&ident, idx)| (ident != idx).then_some(idx))
                 .expect("timer idents run out");
         }
-        assert!(ss.timers.insert(ident, (0, None, interval)).is_none());
+
+        let notify = Arc::new(Semaphore::new(0));
+        let waiter = PollSemaphore::new(notify.clone());
+
+        assert!(ss.timers.insert(ident, (notify, interval)).is_none());
 
         add_timer_to_kqueue(
             ss.kq.as_raw_fd(),
@@ -142,7 +150,7 @@ impl Timer {
             instant_to_nseconds(deadline),
             true,
         );
-        Timer { ident }
+        Timer { ident, waiter }
     }
 
     pub fn reset(&mut self, deadline: Instant, interval: Option<Duration>) {
@@ -154,34 +162,19 @@ impl Timer {
             instant_to_nseconds(deadline),
             true,
         );
-        ss.timers.get_mut(&self.ident).unwrap().2 = interval;
+        ss.timers.get_mut(&self.ident).unwrap().1 = interval;
     }
 
     pub fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<u64> {
         let mut ss = SS.lock().unwrap();
         let ss = ss.as_mut().unwrap();
 
-        let waker = &mut ss.timers.get_mut(&self.ident).unwrap().1;
-        if let Some(waker) = waker {
-            waker.clone_from(cx.waker());
-        } else {
-            *waker = Some(cx.waker().clone());
-        }
-
-        let waker = merge_wakers(
-            ss.timers
-                .values()
-                .filter_map(|(_, waker, _)| waker.clone())
-                .collect(),
-        );
-        let mut cx = Context::from_waker(&waker);
-
-        if let Poll::Ready(Ok(mut guard)) = ss.kq.poll_read_ready(&mut cx) {
+        if let Poll::Ready(Ok(mut guard)) = ss.kq.poll_read_ready(cx) {
             guard.clear_ready();
             let events = wait_kqueue(guard.get_inner().as_raw_fd());
             for ident in events {
-                let (expirations, _, interval) = ss.timers.get_mut(&ident).unwrap();
-                *expirations += 1;
+                let (notify, interval) = ss.timers.get_mut(&ident).unwrap();
+                notify.add_permits(1);
                 if let Some(interval) = interval.take() {
                     add_timer_to_kqueue(
                         ss.kq.as_raw_fd(),
@@ -193,13 +186,17 @@ impl Timer {
             }
         }
 
-        let expirations = &mut ss.timers.get_mut(&self.ident).unwrap().0;
-
-        if *expirations != 0 {
-            Poll::Ready(mem::replace(expirations, 0))
-        } else {
-            Poll::Pending
-        }
+        self.waiter
+            .poll_acquire_many(
+                cx,
+                self.waiter.available_permits().clamp(1, u32::MAX as usize) as u32,
+            )
+            .map(|permits| {
+                let permits = permits.unwrap();
+                let expirations = permits.num_permits();
+                permits.forget();
+                expirations as u64
+            })
     }
 }
 
@@ -217,59 +214,3 @@ impl Drop for Timer {
         debug_assert!(ss.timers.remove(&self.ident).is_some());
     }
 }
-
-mod waker_merger {
-    use std::mem::forget;
-    use std::ptr;
-    use std::sync::Arc;
-    use std::task::{RawWaker, RawWakerVTable, Waker};
-
-    unsafe fn clone(data: *const ()) -> RawWaker {
-        let data = data as *const Arc<Vec<Waker>>;
-        let wakers = Box::new((*data).clone());
-        let data = ptr::from_ref(wakers.as_ref());
-        forget(wakers);
-        RawWaker::new(data as _, &VTABLE)
-    }
-
-    unsafe fn wake(data: *const ()) {
-        let data = data as *mut Arc<Vec<Waker>>;
-        let wakers = Box::from_raw(data);
-        match Arc::try_unwrap(*wakers) {
-            Ok(wakers) => {
-                for waker in wakers {
-                    waker.wake();
-                }
-            }
-            Err(wakers) => {
-                for waker in wakers.iter() {
-                    waker.wake_by_ref();
-                }
-            }
-        }
-    }
-
-    unsafe fn wake_by_ref(data: *const ()) {
-        let data = data as *const Arc<Vec<Waker>>;
-        let wakers = &*data;
-        for waker in wakers.iter() {
-            waker.wake_by_ref();
-        }
-    }
-
-    unsafe fn drop_waker(data: *const ()) {
-        let data = data as *mut Arc<Vec<Waker>>;
-        let _ = Box::from_raw(data);
-    }
-
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop_waker);
-
-    pub fn merge_wakers(wakers: Vec<Waker>) -> Waker {
-        let wakers = Box::new(Arc::new(wakers));
-        let data = ptr::from_ref(wakers.as_ref());
-        forget(wakers);
-        unsafe { Waker::from_raw(RawWaker::new(data as _, &VTABLE)) }
-    }
-}
-
-use waker_merger::merge_wakers;
