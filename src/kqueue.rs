@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
 use tokio::sync::Semaphore;
-
+use tokio::task::unconstrained;
 use tokio_util::sync::PollSemaphore;
 
 use crate::utils::{cvt, instant_to_duration};
@@ -129,7 +129,7 @@ impl Timer {
                     timers: Mutex::new(BTreeMap::new()),
                 });
                 *ss = Arc::downgrade(&new_ss);
-                let _ = tokio::spawn(Background(Arc::downgrade(&new_ss)));
+                let _ = tokio::spawn(unconstrained(Background(Arc::downgrade(&new_ss))));
                 new_ss
             }
         };
@@ -222,7 +222,7 @@ impl Future for Background {
             return Poll::Ready(());
         };
 
-        if let Poll::Ready(Ok(mut guard)) = ss.kq.poll_read_ready(cx) {
+        while let Poll::Ready(Ok(mut guard)) = ss.kq.poll_read_ready(cx) {
             guard.clear_ready();
             let events = wait_kqueue(guard.get_inner().as_raw_fd());
             let mut timers = ss.timers.lock().unwrap();
