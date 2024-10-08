@@ -1,3 +1,4 @@
+use std::cmp::max;
 use std::ffi;
 use std::mem;
 use std::ptr;
@@ -14,18 +15,18 @@ use windows::Win32::System::Threading::{
     INFINITE,
 };
 
-fn set_waitable_timer(wt: HANDLE, ts: (i64, i32)) {
-    unsafe { SetWaitableTimer(wt, ptr::from_ref(&ts.0), ts.1, None, None, false) }
+fn set_waitable_timer(wt: HANDLE, ts: i64) {
+    unsafe { SetWaitableTimer(wt, ptr::from_ref(&ts), 0, None, None, false) }
         .expect("failed to set waitable timer");
 }
 
 unsafe extern "system" fn timer_callback(cb: *mut ffi::c_void, _: BOOLEAN) {
-    let cb = mem::transmute::<*mut ffi::c_void, &Box<dyn Fn() + Send>>(cb);
+    let cb: &mut Box<dyn FnMut() + Send> = mem::transmute(cb);
     cb();
 }
 
-fn make_waitable_timer(ts: (i64, i32), cb: &Box<dyn Fn() + Send>) -> (HANDLE, HANDLE) {
-    let wt = unsafe {
+fn create_waitable_timer() -> HANDLE {
+    unsafe {
         CreateWaitableTimerExW(
             None,
             None,
@@ -33,8 +34,10 @@ fn make_waitable_timer(ts: (i64, i32), cb: &Box<dyn Fn() + Send>) -> (HANDLE, HA
             Threading::TIMER_ALL_ACCESS.0,
         )
     }
-    .expect("failed to create waitable timer");
-    set_waitable_timer(wt, ts);
+    .expect("failed to create waitable timer")
+}
+
+fn start_waitable_timer(wt: HANDLE, cb: &Box<dyn FnMut() + Send>, oneshot: bool) -> HANDLE {
     let mut wh = HANDLE::default();
     unsafe {
         RegisterWaitForSingleObject(
@@ -43,7 +46,7 @@ fn make_waitable_timer(ts: (i64, i32), cb: &Box<dyn Fn() + Send>) -> (HANDLE, HA
             Some(timer_callback),
             Some(ptr::from_ref(cb) as _),
             INFINITE,
-            if ts.1 == 0 {
+            if oneshot {
                 Threading::WT_EXECUTEONLYONCE | Threading::WT_EXECUTEINWAITTHREAD
             } else {
                 Threading::WT_EXECUTEINWAITTHREAD
@@ -51,7 +54,7 @@ fn make_waitable_timer(ts: (i64, i32), cb: &Box<dyn Fn() + Send>) -> (HANDLE, HA
         )
     }
     .expect("failed to watch waitable timer");
-    (wt, wh)
+    wh
 }
 
 fn destroy_waitable_timer(wt: HANDLE, wh: HANDLE) {
@@ -59,41 +62,52 @@ fn destroy_waitable_timer(wt: HANDLE, wh: HANDLE) {
     let _ = unsafe { CloseHandle(wt) };
 }
 
-fn make_timerspec(deadline: Instant, interval: Option<Duration>) -> (i64, i32) {
-    let duetime = -i64::try_from(
+fn make_duetime(deadline: Instant) -> i64 {
+    -i64::try_from(max(
         deadline
             .saturating_duration_since(Instant::now())
             .as_nanos()
             / 100,
-    )
-    .unwrap();
-    let period = i32::try_from(interval.unwrap_or_default().as_millis()).unwrap();
-    (duetime, period)
+        1,
+    ))
+    .unwrap()
 }
 
+#[allow(dead_code)]
 pub struct Timer {
     wt: HANDLE,
     wh: HANDLE,
-    #[allow(dead_code)]
-    cb: Box<Box<dyn Fn() + Send>>,
+    cb: Box<Box<dyn FnMut() + Send>>,
+    deadline: Box<Instant>,
     waiter: PollSemaphore,
 }
 
 impl Timer {
-    pub fn new(deadline: Instant, interval: Option<Duration>) -> Timer {
-        let ts = make_timerspec(deadline, interval);
+    pub fn new(deadline: Option<Instant>, interval: Option<Duration>) -> Timer {
+        let mut deadline = Box::new(deadline.unwrap_or_else(|| Instant::now() + interval.unwrap_or_default()));
+        let ts = make_duetime(*deadline);
         let notify = Arc::new(Semaphore::new(0));
         let waiter = PollSemaphore::new(notify.clone());
-        let cb = Box::new(Box::<dyn Fn() + Send>::from(Box::new(move || {
+        let wt = create_waitable_timer();
+        set_waitable_timer(wt, ts);
+        let cwt = wt.0 as usize;
+        let pdl = ptr::from_mut(deadline.as_mut()) as usize;
+        let cb = Box::new(Box::<dyn FnMut() + Send>::from(Box::new(move || {
             notify.add_permits(1);
+            if let Some(interval) = interval {
+                let deadline = unsafe { &mut *(pdl as *mut Instant) };
+                *deadline += interval;
+                let wt = HANDLE(cwt as *mut std::ffi::c_void);
+                let ts = make_duetime(*deadline);
+                set_waitable_timer(wt, ts);
+            }
         })));
-        let (wt, wh) = make_waitable_timer(ts, cb.as_ref());
-        Timer { wt, wh, cb, waiter }
+        let wh = start_waitable_timer(wt, cb.as_ref(), interval.is_none());
+        Timer { wt, wh, cb, deadline, waiter }
     }
 
-    pub fn reset(&mut self, deadline: Instant, interval: Option<Duration>) {
-        let _ = self.waiter.as_ref().forget_permits(usize::MAX);
-        set_waitable_timer(self.wt, make_timerspec(deadline, interval));
+    pub fn reset(&mut self, deadline: Option<Instant>, interval: Option<Duration>) {
+        *self = Timer::new(deadline, interval);
     }
 
     pub fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<u64> {
