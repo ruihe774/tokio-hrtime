@@ -97,16 +97,17 @@ impl Timer {
     }
 
     pub fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<u64> {
-        match self.waiter.available_permits() {
-            0 => self.waiter.poll_acquire(cx).map(|permits| {
-                permits.unwrap().forget();
-                1
-            }),
-            expirations => {
-                self.waiter.as_ref().forget_permits(expirations);
-                Poll::Ready(expirations as u64)
-            }
-        }
+        self.waiter
+            .poll_acquire_many(
+                cx,
+                self.waiter.available_permits().clamp(1, u32::MAX as usize) as u32,
+            )
+            .map(|permits| {
+                let permits = permits.unwrap();
+                let expirations = permits.num_permits();
+                permits.forget();
+                expirations as u64
+            })
     }
 }
 
