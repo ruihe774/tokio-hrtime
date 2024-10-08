@@ -52,7 +52,7 @@ pub fn sleep_until(deadline: Instant) -> Sleep {
 }
 
 pub fn sleep(duration: Duration) -> Sleep {
-    sleep_until(Instant::now().checked_add(duration).unwrap())
+    sleep_until(Instant::now() + duration)
 }
 
 impl Future for Sleep {
@@ -119,7 +119,7 @@ pub fn timeout_at<F: IntoFuture>(deadline: Instant, future: F) -> Timeout<F::Int
 }
 
 pub fn timeout<F: IntoFuture>(duration: Duration, future: F) -> Timeout<F::IntoFuture> {
-    timeout_at(Instant::now().checked_add(duration).unwrap(), future)
+    timeout_at(Instant::now() + duration, future)
 }
 
 impl<F: Future> Future for Timeout<F> {
@@ -232,7 +232,7 @@ impl Interval {
     }
 
     pub fn reset_after(&mut self, after: Duration) {
-        self.reset_at(Instant::now().checked_add(after).unwrap())
+        self.reset_at(Instant::now() + after)
     }
 
     pub fn reset_at(&mut self, deadline: Instant) {
@@ -245,11 +245,7 @@ impl Interval {
             let divider = u64::try_from(self.period.as_nanos()).unwrap();
             self.expirations = past / divider + 1;
             self.timer.reset(
-                Some(
-                    (now - Duration::from_nanos(past % divider))
-                        .checked_add(self.period)
-                        .unwrap(),
-                ),
+                Some(now - Duration::from_nanos(past % divider) + self.period),
                 Some(self.period),
             )
         }
