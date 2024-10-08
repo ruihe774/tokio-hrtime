@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::future::Future;
 use std::mem;
-use std::ops::DerefMut;
 use std::os::fd::{AsRawFd, FromRawFd};
+use std::pin::Pin;
 use std::ptr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -105,12 +106,13 @@ fn instant_to_nseconds(instant: Instant) -> i64 {
 
 struct SharedState {
     kq: AsyncFd<File>,
-    timers: BTreeMap<usize, (Arc<Semaphore>, Option<Duration>)>,
+    timers: Mutex<BTreeMap<usize, (Arc<Semaphore>, Option<Duration>)>>,
 }
 
-static SS: Mutex<Option<SharedState>> = Mutex::new(None);
+static SS: Mutex<Weak<SharedState>> = Mutex::new(Weak::new());
 
 pub struct Timer {
+    ss: Arc<SharedState>,
     ident: usize,
     waiter: PollSemaphore,
 }
@@ -118,21 +120,30 @@ pub struct Timer {
 impl Timer {
     pub fn new(deadline: Instant, interval: Option<Duration>) -> Timer {
         let mut ss = SS.lock().unwrap();
-        let ss = ss.get_or_insert_with(|| SharedState {
-            kq: create_kqueue(),
-            timers: BTreeMap::new(),
-        });
 
-        let mut ident = ss
-            .timers
+        let ss = match ss.upgrade() {
+            Some(ss) => ss,
+            None => {
+                let new_ss = Arc::new(SharedState {
+                    kq: create_kqueue(),
+                    timers: Mutex::new(BTreeMap::new()),
+                });
+                *ss = Arc::downgrade(&new_ss);
+                let _ = tokio::spawn(Background(Arc::downgrade(&new_ss)));
+                new_ss
+            }
+        };
+
+        let mut timers = ss.timers.lock().unwrap();
+
+        let mut ident = timers
             .keys()
             .last()
             .copied()
             .unwrap_or_default()
             .wrapping_add(1);
         if ident == 0 {
-            ident = ss
-                .timers
+            ident = timers
                 .keys()
                 .zip(1usize..)
                 .find_map(|(&ident, idx)| (ident != idx).then_some(idx))
@@ -142,7 +153,7 @@ impl Timer {
         let notify = Arc::new(Semaphore::new(0));
         let waiter = PollSemaphore::new(notify.clone());
 
-        assert!(ss.timers.insert(ident, (notify, interval)).is_none());
+        assert!(timers.insert(ident, (notify, interval)).is_none());
 
         add_timer_to_kqueue(
             ss.kq.as_raw_fd(),
@@ -150,42 +161,29 @@ impl Timer {
             instant_to_nseconds(deadline),
             true,
         );
-        Timer { ident, waiter }
+
+        drop(timers);
+
+        Timer { ss, ident, waiter }
     }
 
     pub fn reset(&mut self, deadline: Instant, interval: Option<Duration>) {
-        let mut ss = SS.lock().unwrap();
-        let ss = ss.as_mut().unwrap();
         add_timer_to_kqueue(
-            ss.kq.as_raw_fd(),
+            self.ss.kq.as_raw_fd(),
             self.ident,
             instant_to_nseconds(deadline),
             true,
         );
-        ss.timers.get_mut(&self.ident).unwrap().1 = interval;
+        self.ss
+            .timers
+            .lock()
+            .unwrap()
+            .get_mut(&self.ident)
+            .unwrap()
+            .1 = interval;
     }
 
     pub fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<u64> {
-        let mut ss = SS.lock().unwrap();
-        let ss = ss.as_mut().unwrap();
-
-        if let Poll::Ready(Ok(mut guard)) = ss.kq.poll_read_ready(cx) {
-            guard.clear_ready();
-            let events = wait_kqueue(guard.get_inner().as_raw_fd());
-            for ident in events {
-                let (notify, interval) = ss.timers.get_mut(&ident).unwrap();
-                notify.add_permits(1);
-                if let Some(interval) = interval.take() {
-                    add_timer_to_kqueue(
-                        ss.kq.as_raw_fd(),
-                        ident,
-                        duration_to_nseconds(interval),
-                        false,
-                    );
-                }
-            }
-        }
-
         self.waiter
             .poll_acquire_many(
                 cx,
@@ -202,15 +200,46 @@ impl Timer {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        let Ok(mut ss) = SS.lock() else {
-            debug_assert!(false);
-            return;
+        delete_timer_from_kqueue(self.ss.kq.as_raw_fd(), self.ident);
+        debug_assert!(self
+            .ss
+            .timers
+            .lock()
+            .ok()
+            .map(|mut timer| timer.remove(&self.ident))
+            .flatten()
+            .is_some());
+    }
+}
+
+struct Background(Weak<SharedState>);
+
+impl Future for Background {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let Some(ss) = self.0.upgrade() else {
+            return Poll::Ready(());
         };
-        let Some(ss) = ss.deref_mut() else {
-            debug_assert!(false);
-            return;
-        };
-        delete_timer_from_kqueue(ss.kq.as_raw_fd(), self.ident);
-        debug_assert!(ss.timers.remove(&self.ident).is_some());
+
+        if let Poll::Ready(Ok(mut guard)) = ss.kq.poll_read_ready(cx) {
+            guard.clear_ready();
+            let events = wait_kqueue(guard.get_inner().as_raw_fd());
+            let mut timers = ss.timers.lock().unwrap();
+            for ident in events {
+                let (notify, interval) = timers.get_mut(&ident).unwrap();
+                notify.add_permits(1);
+                if let Some(interval) = interval.take() {
+                    add_timer_to_kqueue(
+                        ss.kq.as_raw_fd(),
+                        ident,
+                        duration_to_nseconds(interval),
+                        false,
+                    );
+                }
+            }
+        }
+
+        Poll::Pending
     }
 }

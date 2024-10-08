@@ -13,7 +13,7 @@ categories = ["asynchronous", "os"]
 [dependencies]
 cfg-if = "1"
 pin-project-lite = "0.2"
-tokio = { version = "1", default-features = false }
+tokio = { version = "1", default-features = false, features = ["rt"] }
 tokio-util = "0.7"
 
 [features]
