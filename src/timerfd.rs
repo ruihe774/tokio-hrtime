@@ -42,7 +42,7 @@ fn make_timerfd(timerspec: libc::itimerspec, absolute: bool) -> AsyncFd<File> {
 fn duration_to_timespec(t: Duration) -> libc::timespec {
     libc::timespec {
         tv_sec: t.as_secs().try_into().unwrap(),
-        tv_nsec: t.subsec_nanos().try_into().unwrap(),
+        tv_nsec: t.subsec_nanos() as _,
     }
 }
 
