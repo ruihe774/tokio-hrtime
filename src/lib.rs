@@ -106,7 +106,6 @@ pin_project! {
     pub struct Timeout<F> {
         #[pin]
         future: F,
-        #[pin]
         sleep: Sleep,
     }
 }
@@ -126,14 +125,12 @@ impl<F: Future> Future for Timeout<F> {
     type Output = Result<F::Output, error::Elapsed>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.sleep.is_elapsed() {
-            return Poll::Ready(Err(error::Elapsed(())));
-        }
-
-        let this = self.project();
-        if let Poll::Ready(output) = this.future.poll(cx) {
+        let mut this = self.project();
+        if let Poll::Ready(()) = Pin::new(&mut this.sleep).poll(cx) {
+            Poll::Ready(Err(error::Elapsed(())))
+        } else if let Poll::Ready(output) = this.future.poll(cx) {
             Poll::Ready(Ok(output))
-        } else if let Poll::Ready(()) = this.sleep.poll(cx) {
+        } else if let Poll::Ready(()) = Pin::new(&mut this.sleep).poll(cx) {
             Poll::Ready(Err(error::Elapsed(())))
         } else {
             Poll::Pending
