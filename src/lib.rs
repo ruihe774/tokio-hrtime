@@ -37,6 +37,19 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(not(feature = "rt"))]
+fn poll_timer(timer: &mut Timer, cx: &mut Context) -> Poll<u64> {
+    timer.poll_expired(cx)
+}
+
+#[cfg(feature = "rt")]
+fn poll_timer(timer: &mut Timer, cx: &mut Context) -> Poll<u64> {
+    std::pin::pin!(tokio::task::unconstrained(std::future::poll_fn(|cx| {
+        timer.poll_expired(cx)
+    })))
+    .poll(cx)
+}
+
 pub struct Sleep {
     timer: Timer,
     deadline: Instant,
@@ -63,7 +76,7 @@ impl Future for Sleep {
             return Poll::Ready(());
         }
 
-        self.elapsed = matches!(self.timer.poll_expired(cx), Poll::Ready(_));
+        self.elapsed = matches!(poll_timer(&mut self.timer, cx), Poll::Ready(_));
 
         if self.elapsed {
             Poll::Ready(())
@@ -204,7 +217,7 @@ impl Interval {
     }
 
     pub fn poll_tick(&mut self, cx: &mut Context<'_>) -> Poll<Instant> {
-        if let Poll::Ready(exp) = self.timer.poll_expired(cx) {
+        if let Poll::Ready(exp) = poll_timer(&mut self.timer, cx) {
             self.expirations += exp;
         };
         if self.expirations != 0 {

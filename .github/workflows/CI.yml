@@ -20,4 +20,4 @@ jobs:
       - name: Setup toolchain
         uses: dtolnay/rust-toolchain@1.81
       - name: Run tests
-        run: cargo test --features test
+        run: cargo test --features test rt
