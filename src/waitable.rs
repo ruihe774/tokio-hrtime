@@ -1,15 +1,13 @@
 use std::ffi;
+use std::marker::PhantomPinned;
 use std::mem;
 use std::panic::catch_unwind;
 use std::pin::Pin;
 use std::process::abort;
 use std::ptr;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use std::sync::Mutex;
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
-
-use tokio::sync::Semaphore;
-use tokio_util::sync::PollSemaphore;
 
 use windows::core::HRESULT;
 use windows::Win32::Foundation::{CloseHandle, BOOLEAN, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0};
@@ -25,14 +23,22 @@ fn set_waitable_timer(wt: HANDLE, ts: i64) {
 
 struct Capsule {
     wt: HANDLE,
-    notify: Arc<Semaphore>,
+    waker: Option<Waker>,
+    expirations: u64,
     deadline: Instant,
     interval: Option<Duration>,
+    _pin: PhantomPinned,
 }
 
 fn reset_timer(capsule: &Mutex<Capsule>) {
     let mut capsule = capsule.lock().unwrap();
-    capsule.notify.add_permits(1);
+
+    capsule.expirations += 1;
+
+    if let Some(waker) = capsule.waker.take() {
+        waker.wake();
+    }
+
     if let Some(interval) = capsule.interval {
         capsule.deadline += interval;
         let ts = make_duetime(capsule.deadline);
@@ -62,11 +68,7 @@ fn create_waitable_timer() -> HANDLE {
     .expect("failed to create waitable timer")
 }
 
-unsafe fn start_waitable_timer(
-    wt: HANDLE,
-    capsule: Pin<&Mutex<Capsule>>,
-    oneshot: bool,
-) -> HANDLE {
+unsafe fn start_waitable_timer(wt: HANDLE, capsule: Pin<&Mutex<Capsule>>, oneshot: bool) -> HANDLE {
     let mut wh = HANDLE::default();
     unsafe {
         RegisterWaitForSingleObject(
@@ -112,30 +114,24 @@ pub struct Timer {
     wt: HANDLE,
     wh: HANDLE,
     capsule: Pin<Box<Mutex<Capsule>>>,
-    waiter: PollSemaphore,
 }
 
 impl Timer {
     pub fn new(deadline: Option<Instant>, interval: Option<Duration>) -> Timer {
         let deadline = deadline.unwrap_or_else(|| Instant::now() + interval.unwrap_or_default());
         let ts = make_duetime(deadline);
-        let notify = Arc::new(Semaphore::new(0));
-        let waiter = PollSemaphore::new(notify.clone());
         let wt = create_waitable_timer();
         set_waitable_timer(wt, ts);
         let capsule = Box::pin(Mutex::new(Capsule {
-            notify,
             wt,
+            waker: None,
+            expirations: 0,
             deadline,
             interval,
+            _pin: PhantomPinned,
         }));
         let wh = unsafe { start_waitable_timer(wt, capsule.as_ref(), interval.is_none()) };
-        Timer {
-            wt,
-            wh,
-            capsule,
-            waiter,
-        }
+        Timer { wt, wh, capsule }
     }
 
     pub fn reset(&mut self, deadline: Option<Instant>, interval: Option<Duration>) {
@@ -143,17 +139,21 @@ impl Timer {
     }
 
     pub fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<u64> {
-        self.waiter
-            .poll_acquire_many(
-                cx,
-                self.waiter.available_permits().clamp(1, u32::MAX as usize) as u32,
-            )
-            .map(|permits| {
-                let permits = permits.unwrap();
-                let expirations = permits.num_permits();
-                permits.forget();
-                expirations as u64
-            })
+        let mut capsule = self.capsule.lock().unwrap();
+
+        let expirations = mem::replace(&mut capsule.expirations, 0);
+
+        if let Some(waker) = capsule.waker.as_mut() {
+            waker.clone_from(cx.waker());
+        } else {
+            capsule.waker = Some(cx.waker().clone());
+        }
+
+        if expirations != 0 {
+            Poll::Ready(expirations)
+        } else {
+            Poll::Pending
+        }
     }
 }
 
