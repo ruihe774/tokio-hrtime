@@ -339,7 +339,7 @@ mod tests {
         for i in 0..10 {
             let _ = iv.tick().await;
             let elapsed = start.elapsed();
-            assert!(elapsed.abs_diff(duration * i) < TOLERANCE * (i + 1));
+            assert!(elapsed.abs_diff(duration * i) < TOLERANCE);
         }
     }
 
@@ -352,7 +352,7 @@ mod tests {
         for i in 1..=10 {
             let _ = iv.tick().await;
             let elapsed = start.elapsed();
-            assert!(elapsed.abs_diff(duration * i) < TOLERANCE * i);
+            assert!(elapsed.abs_diff(duration * i) < TOLERANCE);
         }
     }
 
@@ -369,7 +369,7 @@ mod tests {
         let _ = iv.tick().await;
         let _ = iv.tick().await;
         let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration * 4) < TOLERANCE * 5);
+        assert!(elapsed.abs_diff(duration * 4) < TOLERANCE);
     }
 
     #[tokio::test]
@@ -384,8 +384,8 @@ mod tests {
         let _ = iv.tick().await;
         let elapsed = start.elapsed();
         assert!(
-            elapsed.abs_diff(duration * 4) < TOLERANCE * 5
-                || elapsed.abs_diff(duration * 5) < TOLERANCE * 5
+            elapsed.abs_diff(duration * 4) < TOLERANCE
+                || elapsed.abs_diff(duration * 5) < TOLERANCE
         );
     }
 
@@ -399,20 +399,20 @@ mod tests {
         let _ = iv.tick().await;
         let _ = iv.tick().await;
         let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration * 2) < TOLERANCE * 2);
+        assert!(elapsed.abs_diff(duration * 2) < TOLERANCE);
 
         iv.reset_immediately();
         let _ = iv.tick().await;
         let _ = iv.tick().await;
         let _ = iv.tick().await;
         let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration * 4) < TOLERANCE * 4);
+        assert!(elapsed.abs_diff(duration * 4) < TOLERANCE);
 
         iv.reset_at(start + Duration::from_millis(250));
         let _ = iv.tick().await;
         let _ = iv.tick().await;
         let _ = iv.tick().await;
         let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(Duration::from_millis(450)) < TOLERANCE * 5);
+        assert!(elapsed.abs_diff(Duration::from_millis(450)) < TOLERANCE);
     }
 }

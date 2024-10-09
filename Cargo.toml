@@ -26,3 +26,6 @@ tokio = { version = "1", default-features = false, features = ["net"] }
 tokio = { version = "1", default-features = false }
 tokio-util = "0.7"
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_Security"] }
+
+[profile.test]
+opt-level = 2
