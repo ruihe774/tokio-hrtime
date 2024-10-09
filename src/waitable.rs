@@ -4,8 +4,7 @@ use std::panic::catch_unwind;
 use std::pin::Pin;
 use std::process::abort;
 use std::ptr;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -19,8 +18,6 @@ use windows::Win32::System::Threading::{
     UnregisterWaitEx, WaitForSingleObject, INFINITE,
 };
 
-use crate::utils::instant_to_duration;
-
 fn set_waitable_timer(wt: HANDLE, ts: i64) {
     unsafe { SetWaitableTimer(wt, ptr::from_ref(&ts), 0, None, None, false) }
         .expect("failed to set waitable timer");
@@ -29,25 +26,25 @@ fn set_waitable_timer(wt: HANDLE, ts: i64) {
 struct Capsule {
     wt: HANDLE,
     notify: Arc<Semaphore>,
-    deadline: AtomicU64,
-    interval: u64,
+    deadline: Instant,
+    interval: Option<Duration>,
 }
 
-fn reset_timer(capsule: &Capsule) {
+fn reset_timer(capsule: &Mutex<Capsule>) {
+    let mut capsule = capsule.lock().unwrap();
     capsule.notify.add_permits(1);
-    if capsule.interval != 0 {
-        let ts = make_duetime(
-            capsule
-                .deadline
-                .fetch_add(capsule.interval, Ordering::Relaxed),
-        );
+    if let Some(interval) = capsule.interval {
+        capsule.deadline += interval;
+        let ts = make_duetime(capsule.deadline);
         set_waitable_timer(capsule.wt, ts);
     }
 }
 
 unsafe extern "system" fn timer_callback(capsule: *mut ffi::c_void, _: BOOLEAN) {
-    let capsule: &Capsule = mem::transmute(capsule);
-    if let Err(err) = catch_unwind(|| reset_timer(capsule)) {
+    if let Err(err) = catch_unwind(|| {
+        let capsule: &Mutex<Capsule> = mem::transmute(capsule);
+        reset_timer(capsule)
+    }) {
         eprintln!("{err:?}");
         abort();
     }
@@ -65,20 +62,26 @@ fn create_waitable_timer() -> HANDLE {
     .expect("failed to create waitable timer")
 }
 
-unsafe fn start_waitable_timer(wt: HANDLE, capsule: &Capsule) -> HANDLE {
+unsafe fn start_waitable_timer(
+    wt: HANDLE,
+    capsule: Pin<&Mutex<Capsule>>,
+    oneshot: bool,
+) -> HANDLE {
     let mut wh = HANDLE::default();
-    RegisterWaitForSingleObject(
-        ptr::from_mut(&mut wh),
-        wt,
-        Some(timer_callback),
-        Some(ptr::from_ref(capsule) as _),
-        INFINITE,
-        if capsule.interval == 0 {
-            Threading::WT_EXECUTEONLYONCE | Threading::WT_EXECUTEINWAITTHREAD
-        } else {
-            Threading::WT_EXECUTEINWAITTHREAD
-        },
-    )
+    unsafe {
+        RegisterWaitForSingleObject(
+            ptr::from_mut(&mut wh),
+            wt,
+            Some(timer_callback),
+            Some(ptr::from_ref(capsule.get_ref()) as _),
+            INFINITE,
+            if oneshot {
+                Threading::WT_EXECUTEONLYONCE | Threading::WT_EXECUTEINWAITTHREAD
+            } else {
+                Threading::WT_EXECUTEINWAITTHREAD
+            },
+        )
+    }
     .expect("failed to watch waitable timer");
     wh
 }
@@ -94,18 +97,11 @@ fn destroy_waitable_timer(wt: HANDLE, wh: HANDLE) {
     unsafe { CloseHandle(wt) }.unwrap();
 }
 
-fn duration_to_nseconds(duration: Duration) -> u64 {
-    duration.as_nanos().try_into().unwrap()
-}
-
-fn instant_to_nseconds(instant: Instant) -> u64 {
-    duration_to_nseconds(instant_to_duration(instant))
-}
-
-fn make_duetime(deadline: u64) -> i64 {
+fn make_duetime(deadline: Instant) -> i64 {
     -i64::try_from(
         deadline
-            .saturating_sub(instant_to_nseconds(Instant::now()))
+            .saturating_duration_since(Instant::now())
+            .as_nanos()
             .div_ceil(100),
     )
     .unwrap()
@@ -115,26 +111,25 @@ fn make_duetime(deadline: u64) -> i64 {
 pub struct Timer {
     wt: HANDLE,
     wh: HANDLE,
-    capsule: Pin<Box<Capsule>>,
+    capsule: Pin<Box<Mutex<Capsule>>>,
     waiter: PollSemaphore,
 }
 
 impl Timer {
     pub fn new(deadline: Option<Instant>, interval: Option<Duration>) -> Timer {
-        let interval = interval.unwrap_or_default();
-        let deadline = deadline.unwrap_or_else(|| Instant::now() + interval);
-        let ts = make_duetime(instant_to_nseconds(deadline));
+        let deadline = deadline.unwrap_or_else(|| Instant::now() + interval.unwrap_or_default());
+        let ts = make_duetime(deadline);
         let notify = Arc::new(Semaphore::new(0));
         let waiter = PollSemaphore::new(notify.clone());
         let wt = create_waitable_timer();
         set_waitable_timer(wt, ts);
-        let capsule = Box::pin(Capsule {
+        let capsule = Box::pin(Mutex::new(Capsule {
             notify,
             wt,
-            deadline: instant_to_nseconds(deadline + interval).into(),
-            interval: duration_to_nseconds(interval),
-        });
-        let wh = unsafe { start_waitable_timer(wt, &capsule) };
+            deadline,
+            interval,
+        }));
+        let wh = unsafe { start_waitable_timer(wt, capsule.as_ref(), interval.is_none()) };
         Timer {
             wt,
             wh,
