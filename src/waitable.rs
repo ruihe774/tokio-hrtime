@@ -1,9 +1,7 @@
 use std::ffi;
 use std::marker::PhantomPinned;
 use std::mem;
-use std::panic::catch_unwind;
 use std::pin::Pin;
-use std::process::abort;
 use std::ptr;
 use std::sync::Mutex;
 use std::task::{Context, Poll, Waker};
@@ -47,13 +45,8 @@ fn reset_timer(capsule: &Mutex<Capsule>) {
 }
 
 unsafe extern "system" fn timer_callback(capsule: *mut ffi::c_void, _: BOOLEAN) {
-    if let Err(err) = catch_unwind(|| {
-        let capsule: &Mutex<Capsule> = mem::transmute(capsule);
-        reset_timer(capsule)
-    }) {
-        eprintln!("{err:?}");
-        abort();
-    }
+    let capsule: &Mutex<Capsule> = mem::transmute(capsule);
+    reset_timer(capsule);
 }
 
 fn create_waitable_timer() -> HANDLE {
