@@ -1,12 +1,17 @@
 use std::ffi;
 use std::mem;
+use std::panic::catch_unwind;
+use std::pin::Pin;
+use std::process::abort;
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use tokio::sync::Semaphore;
 use tokio_util::sync::PollSemaphore;
+
 use windows::core::HRESULT;
 use windows::Win32::Foundation::{CloseHandle, BOOLEAN, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
@@ -14,14 +19,38 @@ use windows::Win32::System::Threading::{
     UnregisterWaitEx, WaitForSingleObject, INFINITE,
 };
 
+use crate::utils::instant_to_duration;
+
 fn set_waitable_timer(wt: HANDLE, ts: i64) {
     unsafe { SetWaitableTimer(wt, ptr::from_ref(&ts), 0, None, None, false) }
         .expect("failed to set waitable timer");
 }
 
-unsafe extern "system" fn timer_callback(cb: *mut ffi::c_void, _: BOOLEAN) {
-    let cb: &mut Box<dyn FnMut() + Send> = mem::transmute(cb);
-    cb();
+struct Capsule {
+    wt: HANDLE,
+    notify: Arc<Semaphore>,
+    deadline: AtomicU64,
+    interval: u64,
+}
+
+fn reset_timer(capsule: &Capsule) {
+    capsule.notify.add_permits(1);
+    if capsule.interval != 0 {
+        let ts = make_duetime(
+            capsule
+                .deadline
+                .fetch_add(capsule.interval, Ordering::Relaxed),
+        );
+        set_waitable_timer(capsule.wt, ts);
+    }
+}
+
+unsafe extern "system" fn timer_callback(capsule: *mut ffi::c_void, _: BOOLEAN) {
+    let capsule: &Capsule = mem::transmute(capsule);
+    if let Err(err) = catch_unwind(|| reset_timer(capsule)) {
+        eprintln!("{err:?}");
+        abort();
+    }
 }
 
 fn create_waitable_timer() -> HANDLE {
@@ -36,19 +65,15 @@ fn create_waitable_timer() -> HANDLE {
     .expect("failed to create waitable timer")
 }
 
-unsafe fn start_waitable_timer(
-    wt: HANDLE,
-    cb: *mut Box<dyn FnMut() + Send>,
-    oneshot: bool,
-) -> HANDLE {
+unsafe fn start_waitable_timer(wt: HANDLE, capsule: &Capsule) -> HANDLE {
     let mut wh = HANDLE::default();
     RegisterWaitForSingleObject(
         ptr::from_mut(&mut wh),
         wt,
         Some(timer_callback),
-        Some(cb as _),
+        Some(ptr::from_ref(capsule) as _),
         INFINITE,
-        if oneshot {
+        if capsule.interval == 0 {
             Threading::WT_EXECUTEONLYONCE | Threading::WT_EXECUTEINWAITTHREAD
         } else {
             Threading::WT_EXECUTEINWAITTHREAD
@@ -69,11 +94,18 @@ fn destroy_waitable_timer(wt: HANDLE, wh: HANDLE) {
     unsafe { CloseHandle(wt) }.unwrap();
 }
 
-fn make_duetime(deadline: Instant) -> i64 {
+fn duration_to_nseconds(duration: Duration) -> u64 {
+    duration.as_nanos().try_into().unwrap()
+}
+
+fn instant_to_nseconds(instant: Instant) -> u64 {
+    duration_to_nseconds(instant_to_duration(instant))
+}
+
+fn make_duetime(deadline: u64) -> i64 {
     -i64::try_from(
         deadline
-            .saturating_duration_since(Instant::now())
-            .as_nanos()
+            .saturating_sub(instant_to_nseconds(Instant::now()))
             .div_ceil(100),
     )
     .unwrap()
@@ -83,32 +115,32 @@ fn make_duetime(deadline: Instant) -> i64 {
 pub struct Timer {
     wt: HANDLE,
     wh: HANDLE,
-    cb: Box<Box<dyn FnMut() + Send>>,
+    capsule: Pin<Box<Capsule>>,
     waiter: PollSemaphore,
 }
 
 impl Timer {
     pub fn new(deadline: Option<Instant>, interval: Option<Duration>) -> Timer {
-        let mut deadline =
-            deadline.unwrap_or_else(|| Instant::now() + interval.unwrap_or_default());
-        let ts = make_duetime(deadline);
+        let interval = interval.unwrap_or_default();
+        let deadline = deadline.unwrap_or_else(|| Instant::now() + interval);
+        let ts = make_duetime(instant_to_nseconds(deadline));
         let notify = Arc::new(Semaphore::new(0));
         let waiter = PollSemaphore::new(notify.clone());
         let wt = create_waitable_timer();
         set_waitable_timer(wt, ts);
-        let cwt = wt.0 as usize;
-        let mut cb = Box::new(Box::<dyn FnMut() + Send>::from(Box::new(move || {
-            notify.add_permits(1);
-            if let Some(interval) = interval {
-                deadline += interval;
-                let wt = HANDLE(cwt as *mut std::ffi::c_void);
-                let ts = make_duetime(deadline);
-                set_waitable_timer(wt, ts);
-            }
-        })));
-        let wh =
-            unsafe { start_waitable_timer(wt, ptr::from_mut(cb.as_mut()), interval.is_none()) };
-        Timer { wt, wh, cb, waiter }
+        let capsule = Box::pin(Capsule {
+            notify,
+            wt,
+            deadline: instant_to_nseconds(deadline + interval).into(),
+            interval: duration_to_nseconds(interval),
+        });
+        let wh = unsafe { start_waitable_timer(wt, &capsule) };
+        Timer {
+            wt,
+            wh,
+            capsule,
+            waiter,
+        }
     }
 
     pub fn reset(&mut self, deadline: Option<Instant>, interval: Option<Duration>) {
