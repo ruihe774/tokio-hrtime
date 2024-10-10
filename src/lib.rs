@@ -289,6 +289,7 @@ impl Interval {
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use std::sync::LazyLock;
 
     cfg_if::cfg_if! {
         if #[cfg(feature = "test-hires")] {
@@ -298,143 +299,176 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_sleep() {
-        let start = Instant::now();
-        let duration = Duration::from_millis(100);
-        sleep(duration).await;
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration) < TOLERANCE);
+    fn new_current_thread_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .unwrap()
     }
 
-    #[tokio::test]
-    async fn test_sleep_until() {
-        let start = Instant::now();
-        let duration = Duration::from_millis(100);
-        sleep_until(start + duration).await;
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration) < TOLERANCE);
+    fn new_multi_thread_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_io()
+            .worker_threads(4)
+            .build()
+            .unwrap()
     }
 
-    #[tokio::test]
-    async fn test_timeout() {
-        let start = Instant::now();
-        let duration = Duration::from_millis(100);
-        let large_duration = Duration::from_secs(1);
-        let small_duration = Duration::from_millis(10);
-        assert!(timeout(duration, sleep(small_duration)).await.is_ok());
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(small_duration) < TOLERANCE);
+    static CURRENT_THREAD_RUNTIME: LazyLock<tokio::runtime::Runtime> =
+        LazyLock::new(new_current_thread_runtime);
 
-        let start = Instant::now();
-        assert!(timeout(duration, sleep(large_duration)).await.is_err());
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration) < TOLERANCE);
-    }
+    static MULTI_THREAD_RUNTIME: LazyLock<tokio::runtime::Runtime> =
+        LazyLock::new(new_multi_thread_runtime);
 
-    #[tokio::test]
-    async fn test_timeout_at() {
-        let start = Instant::now();
-        let duration = Duration::from_millis(100);
-        let large_duration = Duration::from_secs(1);
-        let small_duration = Duration::from_millis(10);
-        assert!(timeout_at(start + duration, sleep(small_duration))
-            .await
-            .is_ok());
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(small_duration) < TOLERANCE);
-
-        let start = Instant::now();
-        assert!(timeout_at(start + duration, sleep(large_duration))
-            .await
-            .is_err());
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration) < TOLERANCE);
-    }
-
-    #[tokio::test]
-    async fn test_interval() {
-        let start = Instant::now();
-        let duration = Duration::from_millis(100);
-        let mut iv = interval(duration);
-
-        for i in 0..10 {
-            let _ = iv.tick().await;
-            let elapsed = start.elapsed();
-            assert!(elapsed.abs_diff(duration * i) < TOLERANCE);
+    macro_rules! mytest {
+        ($(async fn $name:ident() $body:block)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    let current_thread_runtime = &*CURRENT_THREAD_RUNTIME;
+                    let multi_thread_runtime = &*MULTI_THREAD_RUNTIME;
+                    let local_runtime = new_current_thread_runtime();
+                    let f1 = current_thread_runtime.spawn(async $body);
+                    let f2 = multi_thread_runtime.spawn(async $body);
+                    let f3 = local_runtime.spawn(async $body);
+                    current_thread_runtime.block_on(f1).unwrap();
+                    multi_thread_runtime.block_on(f2).unwrap();
+                    local_runtime.block_on(f3).unwrap();
+                }
+            )*
         }
     }
 
-    #[tokio::test]
-    async fn test_interval_at() {
-        let start = Instant::now();
-        let duration = Duration::from_millis(100);
-        let mut iv = interval_at(start + duration, duration);
+    mytest! {
+        async fn test_sleep() {
+            let start = Instant::now();
+            let duration = Duration::from_millis(100);
+            sleep(duration).await;
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(duration) < TOLERANCE);
+        }
 
-        for i in 1..=10 {
+        async fn test_sleep_until() {
+            let start = Instant::now();
+            let duration = Duration::from_millis(100);
+            sleep_until(start + duration).await;
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(duration) < TOLERANCE);
+        }
+
+        async fn test_timeout() {
+            let start = Instant::now();
+            let duration = Duration::from_millis(100);
+            let large_duration = Duration::from_secs(1);
+            let small_duration = Duration::from_millis(10);
+            assert!(timeout(duration, sleep(small_duration)).await.is_ok());
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(small_duration) < TOLERANCE);
+
+            let start = Instant::now();
+            assert!(timeout(duration, sleep(large_duration)).await.is_err());
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(duration) < TOLERANCE);
+        }
+
+        async fn test_timeout_at() {
+            let start = Instant::now();
+            let duration = Duration::from_millis(100);
+            let large_duration = Duration::from_secs(1);
+            let small_duration = Duration::from_millis(10);
+            assert!(timeout_at(start + duration, sleep(small_duration))
+                .await
+                .is_ok());
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(small_duration) < TOLERANCE);
+
+            let start = Instant::now();
+            assert!(timeout_at(start + duration, sleep(large_duration))
+                .await
+                .is_err());
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(duration) < TOLERANCE);
+        }
+
+        async fn test_interval() {
+            let start = Instant::now();
+            let duration = Duration::from_millis(100);
+            let mut iv = interval(duration);
+
+            for i in 0..10 {
+                let _ = iv.tick().await;
+                let elapsed = start.elapsed();
+                assert!(elapsed.abs_diff(duration * i) < TOLERANCE);
+            }
+        }
+
+        async fn test_interval_at() {
+            let start = Instant::now();
+            let duration = Duration::from_millis(100);
+            let mut iv = interval_at(start + duration, duration);
+
+            for i in 1..=10 {
+                let _ = iv.tick().await;
+                let elapsed = start.elapsed();
+                assert!(elapsed.abs_diff(duration * i) < TOLERANCE);
+            }
+        }
+
+        async fn test_interval_burst() {
+            let start = Instant::now();
+            let duration = Duration::from_millis(100);
+            let mut iv = interval(duration);
+
+            sleep(duration * 3).await;
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
             let _ = iv.tick().await;
             let elapsed = start.elapsed();
-            assert!(elapsed.abs_diff(duration * i) < TOLERANCE);
+            assert!(elapsed.abs_diff(duration * 4) < TOLERANCE);
         }
-    }
 
-    #[tokio::test]
-    async fn test_interval_burst() {
-        let start = Instant::now();
-        let duration = Duration::from_millis(100);
-        let mut iv = interval(duration);
+        async fn test_interval_skip() {
+            let start = Instant::now();
+            let duration = Duration::from_millis(100);
+            let mut iv = interval(duration);
+            iv.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        sleep(duration * 3).await;
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration * 4) < TOLERANCE);
-    }
+            sleep(Duration::from_millis(350)).await;
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed.abs_diff(duration * 4) < TOLERANCE
+                    || elapsed.abs_diff(duration * 5) < TOLERANCE
+            );
+        }
 
-    #[tokio::test]
-    async fn test_interval_skip() {
-        let start = Instant::now();
-        let duration = Duration::from_millis(100);
-        let mut iv = interval(duration);
-        iv.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        async fn test_interval_reset() {
+            let start = Instant::now();
+            let duration = Duration::from_millis(100);
+            let mut iv = interval(duration);
 
-        sleep(Duration::from_millis(350)).await;
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed.abs_diff(duration * 4) < TOLERANCE
-                || elapsed.abs_diff(duration * 5) < TOLERANCE
-        );
-    }
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(duration * 2) < TOLERANCE);
 
-    #[tokio::test]
-    async fn test_interval_reset() {
-        let start = Instant::now();
-        let duration = Duration::from_millis(100);
-        let mut iv = interval(duration);
+            iv.reset_immediately();
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(duration * 4) < TOLERANCE);
 
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration * 2) < TOLERANCE);
-
-        iv.reset_immediately();
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(duration * 4) < TOLERANCE);
-
-        iv.reset_at(start + Duration::from_millis(250));
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let _ = iv.tick().await;
-        let elapsed = start.elapsed();
-        assert!(elapsed.abs_diff(Duration::from_millis(450)) < TOLERANCE);
+            iv.reset_at(start + Duration::from_millis(250));
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let _ = iv.tick().await;
+            let elapsed = start.elapsed();
+            assert!(elapsed.abs_diff(Duration::from_millis(450)) < TOLERANCE);
+        }
     }
 }

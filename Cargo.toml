@@ -15,7 +15,7 @@ cfg-if = "1"
 pin-project-lite = "0.2"
 
 [features]
-test = ["tokio/rt", "tokio/macros"]
+test = ["tokio/rt", "tokio/rt-multi-thread"]
 test-hires = ["test"]
 rt = ["tokio/rt"]
 default = ["rt"]
