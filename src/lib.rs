@@ -54,13 +54,13 @@ fn poll_timer(timer: &mut Timer, cx: &mut Context) -> Poll<u64> {
     .poll(cx)
 }
 
+#[must_use]
 pub struct Sleep {
     timer: Timer,
     deadline: Instant,
     elapsed: bool,
 }
 
-#[must_use]
 pub fn sleep_until(deadline: Instant) -> Sleep {
     Sleep {
         timer: Timer::new(Some(deadline), None),
@@ -69,7 +69,6 @@ pub fn sleep_until(deadline: Instant) -> Sleep {
     }
 }
 
-#[must_use]
 pub fn sleep(duration: Duration) -> Sleep {
     sleep_until(Instant::now() + duration)
 }
@@ -122,6 +121,7 @@ pub mod error {
 }
 
 pin_project! {
+    #[must_use]
     pub struct Timeout<F> {
         #[pin]
         future: F,
@@ -129,7 +129,6 @@ pin_project! {
     }
 }
 
-#[must_use]
 pub fn timeout_at<F: IntoFuture>(deadline: Instant, future: F) -> Timeout<F::IntoFuture> {
     Timeout {
         future: future.into_future(),
@@ -137,7 +136,6 @@ pub fn timeout_at<F: IntoFuture>(deadline: Instant, future: F) -> Timeout<F::Int
     }
 }
 
-#[must_use]
 pub fn timeout<F: IntoFuture>(duration: Duration, future: F) -> Timeout<F::IntoFuture> {
     timeout_at(Instant::now() + duration, future)
 }
@@ -185,6 +183,7 @@ pub enum MissedTickBehavior {
     Skip,
 }
 
+#[must_use]
 pub struct Interval {
     timer: Timer,
     period: Duration,
@@ -192,7 +191,6 @@ pub struct Interval {
     behavior: MissedTickBehavior,
 }
 
-#[must_use]
 pub fn interval_at(start: Instant, period: Duration) -> Interval {
     Interval {
         timer: Timer::new(Some(start), Some(period)),
@@ -202,7 +200,6 @@ pub fn interval_at(start: Instant, period: Duration) -> Interval {
     }
 }
 
-#[must_use]
 pub fn interval(period: Duration) -> Interval {
     Interval {
         timer: Timer::new(None, Some(period)),
