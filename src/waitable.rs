@@ -14,13 +14,18 @@ use windows::Win32::System::Threading::{
     UnregisterWaitEx, WaitForSingleObject, INFINITE,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SendableHANDLE(HANDLE);
+
+unsafe impl Send for SendableHANDLE {}
+
 fn set_waitable_timer(wt: HANDLE, ts: i64) {
     unsafe { SetWaitableTimer(wt, ptr::from_ref(&ts), 0, None, None, false) }
         .expect("failed to set waitable timer");
 }
 
 struct Capsule {
-    wt: HANDLE,
+    wt: SendableHANDLE,
     waker: Option<Waker>,
     expirations: u64,
     deadline: Instant,
@@ -40,7 +45,7 @@ fn reset_timer(capsule: &Mutex<Capsule>) {
     if let Some(interval) = capsule.interval {
         capsule.deadline += interval;
         let ts = make_duetime(capsule.deadline);
-        set_waitable_timer(capsule.wt, ts);
+        set_waitable_timer(capsule.wt.0, ts);
     }
 }
 
@@ -103,8 +108,8 @@ fn make_duetime(deadline: Instant) -> i64 {
 }
 
 pub struct Timer {
-    wt: HANDLE,
-    wh: HANDLE,
+    wt: SendableHANDLE,
+    wh: SendableHANDLE,
     capsule: Pin<Box<Mutex<Capsule>>>,
 }
 
@@ -115,7 +120,7 @@ impl Timer {
         let wt = create_waitable_timer();
         set_waitable_timer(wt, ts);
         let capsule = Box::pin(Mutex::new(Capsule {
-            wt,
+            wt: SendableHANDLE(wt),
             waker: None,
             expirations: 0,
             deadline,
@@ -123,7 +128,11 @@ impl Timer {
             _pin: PhantomPinned,
         }));
         let wh = unsafe { start_waitable_timer(wt, capsule.as_ref(), interval.is_none()) };
-        Timer { wt, wh, capsule }
+        Timer {
+            wt: SendableHANDLE(wt),
+            wh: SendableHANDLE(wh),
+            capsule,
+        }
     }
 
     pub fn reset(&mut self, deadline: Option<Instant>, interval: Option<Duration>) {
@@ -151,6 +160,6 @@ impl Timer {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        destroy_waitable_timer(self.wt, self.wh);
+        destroy_waitable_timer(self.wt.0, self.wh.0);
     }
 }

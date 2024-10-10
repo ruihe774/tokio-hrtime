@@ -300,18 +300,18 @@ mod tests {
     }
 
     fn new_current_thread_runtime() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .build()
-            .unwrap()
+        let mut builder = tokio::runtime::Builder::new_current_thread();
+        #[cfg(unix)]
+        builder.enable_io();
+        builder.build().unwrap()
     }
 
     fn new_multi_thread_runtime() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_io()
-            .worker_threads(4)
-            .build()
-            .unwrap()
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder.worker_threads(4);
+        #[cfg(unix)]
+        builder.enable_io();
+        builder.build().unwrap()
     }
 
     static CURRENT_THREAD_RUNTIME: LazyLock<tokio::runtime::Runtime> =
