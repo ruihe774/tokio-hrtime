@@ -17,7 +17,7 @@ fn set_timefd(fd: libc::c_int, timerspec: libc::itimerspec, absolute: bool) {
         libc::timerfd_settime(
             fd,
             if absolute { libc::TFD_TIMER_ABSTIME } else { 0 },
-            &timerspec as *const libc::itimerspec,
+            ptr::from_ref(&timerspec),
             ptr::null_mut(),
         )
     })
@@ -42,6 +42,7 @@ fn make_timerfd(timerspec: libc::itimerspec, absolute: bool) -> AsyncFd<File> {
 fn duration_to_timespec(t: Duration) -> libc::timespec {
     libc::timespec {
         tv_sec: t.as_secs().try_into().unwrap(),
+        #[expect(clippy::cast_lossless)]
         tv_nsec: t.subsec_nanos() as _,
     }
 }
@@ -67,7 +68,7 @@ impl Timer {
     }
 
     pub fn reset(&mut self, deadline: Option<Instant>, interval: Option<Duration>) {
-        set_timefd(self.0.as_raw_fd(), make_timerspec(deadline, interval), true)
+        set_timefd(self.0.as_raw_fd(), make_timerspec(deadline, interval), true);
     }
 
     pub fn poll_expired(&mut self, cx: &mut Context<'_>) -> Poll<u64> {
@@ -77,10 +78,9 @@ impl Timer {
                 let mut guard = r.expect("failed to poll timerfd");
                 guard.clear_ready();
                 let mut expirations = mem::MaybeUninit::<u64>::uninit();
-                match guard
-                    .get_inner()
-                    .read(unsafe { slice::from_raw_parts_mut(expirations.as_mut_ptr() as _, 8) })
-                {
+                match guard.get_inner().read(unsafe {
+                    slice::from_raw_parts_mut(expirations.as_mut_ptr().cast::<u8>(), 8)
+                }) {
                     Ok(size) => {
                         assert_eq!(size, 8);
                         Poll::Ready(unsafe { expirations.assume_init() })

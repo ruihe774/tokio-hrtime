@@ -11,7 +11,7 @@ use crate::utils::{cvt, instant_to_duration};
 
 cfg_if::cfg_if! {
     if #[cfg(target_vendor = "apple")] {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         fn add_timer_to_kqueue(kq: libc::c_int, id: usize, duration: i64, oneshot: bool) {
             let mut ti = std::mem::MaybeUninit::<libc::mach_timebase_info>::uninit();
             assert_eq!(unsafe { libc::mach_timebase_info(ti.as_mut_ptr()) }, 0);

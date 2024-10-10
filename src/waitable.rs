@@ -102,7 +102,6 @@ fn make_duetime(deadline: Instant) -> i64 {
     .unwrap()
 }
 
-#[allow(dead_code)]
 pub struct Timer {
     wt: HANDLE,
     wh: HANDLE,

@@ -11,6 +11,10 @@
 //!   specifically, `NOTE_MACHTIME` is used in Darwin to obtain the similar resolution to GCD.
 //! - `CreateWaitableTimerEx` with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` in Windows.
 
+#![warn(clippy::pedantic)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::missing_panics_doc)]
+
 #[doc(no_inline)]
 pub use std::time::{Duration, Instant};
 
@@ -25,13 +29,13 @@ mod utils;
 cfg_if::cfg_if! {
     if #[cfg(any(target_os = "linux", target_os = "android"))] {
         mod timerfd;
-        use timerfd::*;
+        use timerfd::Timer;
     } else if #[cfg(any(target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly", target_vendor = "apple"))] {
         mod kqueue;
-        use kqueue::*;
+        use kqueue::Timer;
     } else if #[cfg(windows)] {
         mod waitable;
-        use waitable::*;
+        use waitable::Timer;
     } else {
         compile_error!("unsupported platform");
     }
@@ -56,6 +60,7 @@ pub struct Sleep {
     elapsed: bool,
 }
 
+#[must_use]
 pub fn sleep_until(deadline: Instant) -> Sleep {
     Sleep {
         timer: Timer::new(Some(deadline), None),
@@ -64,6 +69,7 @@ pub fn sleep_until(deadline: Instant) -> Sleep {
     }
 }
 
+#[must_use]
 pub fn sleep(duration: Duration) -> Sleep {
     sleep_until(Instant::now() + duration)
 }
@@ -96,7 +102,7 @@ impl Sleep {
     }
 
     pub fn reset(&mut self, deadline: Instant) {
-        self.timer.reset(Some(deadline), None)
+        self.timer.reset(Some(deadline), None);
     }
 }
 
@@ -123,6 +129,7 @@ pin_project! {
     }
 }
 
+#[must_use]
 pub fn timeout_at<F: IntoFuture>(deadline: Instant, future: F) -> Timeout<F::IntoFuture> {
     Timeout {
         future: future.into_future(),
@@ -130,6 +137,7 @@ pub fn timeout_at<F: IntoFuture>(deadline: Instant, future: F) -> Timeout<F::Int
     }
 }
 
+#[must_use]
 pub fn timeout<F: IntoFuture>(duration: Duration, future: F) -> Timeout<F::IntoFuture> {
     timeout_at(Instant::now() + duration, future)
 }
@@ -139,6 +147,7 @@ impl<F: Future> Future for Timeout<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
+        #[expect(clippy::same_functions_in_if_condition)]
         if let Poll::Ready(()) = Pin::new(&mut this.sleep).poll(cx) {
             Poll::Ready(Err(error::Elapsed(())))
         } else if let Poll::Ready(output) = this.future.poll(cx) {
@@ -183,6 +192,7 @@ pub struct Interval {
     behavior: MissedTickBehavior,
 }
 
+#[must_use]
 pub fn interval_at(start: Instant, period: Duration) -> Interval {
     Interval {
         timer: Timer::new(Some(start), Some(period)),
@@ -192,6 +202,7 @@ pub fn interval_at(start: Instant, period: Duration) -> Interval {
     }
 }
 
+#[must_use]
 pub fn interval(period: Duration) -> Interval {
     Interval {
         timer: Timer::new(None, Some(period)),
@@ -242,7 +253,7 @@ impl Interval {
     }
 
     pub fn reset_after(&mut self, after: Duration) {
-        self.reset_at(Instant::now() + after)
+        self.reset_at(Instant::now() + after);
     }
 
     pub fn reset_at(&mut self, deadline: Instant) {
@@ -254,10 +265,11 @@ impl Interval {
             let past = u64::try_from((now - deadline).as_nanos()).unwrap();
             let divider = u64::try_from(self.period.as_nanos()).unwrap();
             self.expirations = past / divider + 1;
+            #[expect(clippy::unchecked_duration_subtraction)]
             self.timer.reset(
                 Some(now - Duration::from_nanos(past % divider) + self.period),
                 Some(self.period),
-            )
+            );
         }
     }
 
