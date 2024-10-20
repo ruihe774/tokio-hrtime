@@ -20,7 +20,7 @@ struct SendableHANDLE(HANDLE);
 unsafe impl Send for SendableHANDLE {}
 
 fn set_waitable_timer(wt: HANDLE, ts: i64) {
-    unsafe { SetWaitableTimer(wt, ptr::from_ref(&ts), 0, None, None, false) }
+    unsafe { SetWaitableTimer(wt, &raw const ts, 0, None, None, false) }
         .expect("failed to set waitable timer");
 }
 
@@ -70,7 +70,7 @@ unsafe fn start_waitable_timer(wt: HANDLE, capsule: Pin<&Mutex<Capsule>>, onesho
     let mut wh = HANDLE::default();
     unsafe {
         RegisterWaitForSingleObject(
-            ptr::from_mut(&mut wh),
+            &raw mut wh,
             wt,
             Some(timer_callback),
             Some(ptr::from_ref(capsule.get_ref()) as _),

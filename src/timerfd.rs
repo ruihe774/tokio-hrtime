@@ -17,7 +17,7 @@ fn set_timefd(fd: libc::c_int, timerspec: libc::itimerspec, absolute: bool) {
         libc::timerfd_settime(
             fd,
             if absolute { libc::TFD_TIMER_ABSTIME } else { 0 },
-            ptr::from_ref(&timerspec),
+            &raw const timerspec,
             ptr::null_mut(),
         )
     })

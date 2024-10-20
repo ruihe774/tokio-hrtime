@@ -74,7 +74,7 @@ fn wait_kqueue(kq: libc::c_int) -> Option<isize> {
             0,
             eventlist.as_mut_ptr(),
             1,
-            ptr::from_ref(&immediate),
+            &raw const immediate,
         )
     })
     .expect("failed to wait on kqueue")
