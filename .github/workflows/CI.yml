@@ -18,6 +18,6 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
       - name: Setup toolchain
-        uses: dtolnay/rust-toolchain@1.81
+        uses: dtolnay/rust-toolchain@stable
       - name: Run tests
         run: cargo test --features test,rt
