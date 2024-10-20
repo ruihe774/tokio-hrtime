@@ -12,6 +12,7 @@
 //! - `CreateWaitableTimerEx` with `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` in Windows.
 
 #![warn(clippy::pedantic)]
+#![warn(clippy::float_arithmetic)]
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::missing_panics_doc)]
 
