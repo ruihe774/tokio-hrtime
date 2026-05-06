@@ -8,7 +8,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use windows::core::HRESULT;
-use windows::Win32::Foundation::{CloseHandle, BOOLEAN, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
     self, CreateEventW, CreateWaitableTimerExW, RegisterWaitForSingleObject, SetWaitableTimer,
     UnregisterWaitEx, WaitForSingleObject, INFINITE,
@@ -49,7 +49,7 @@ fn reset_timer(capsule: &Mutex<Capsule>) {
     }
 }
 
-unsafe extern "system" fn timer_callback(capsule: *mut ffi::c_void, _: BOOLEAN) {
+unsafe extern "system" fn timer_callback(capsule: *mut ffi::c_void, _: bool) {
     let capsule: &Mutex<Capsule> = mem::transmute(capsule);
     reset_timer(capsule);
 }
@@ -88,7 +88,7 @@ unsafe fn start_waitable_timer(wt: HANDLE, capsule: Pin<&Mutex<Capsule>>, onesho
 
 fn destroy_waitable_timer(wt: HANDLE, wh: HANDLE) {
     let eh = unsafe { CreateEventW(None, false, false, None) }.unwrap();
-    match unsafe { UnregisterWaitEx(wh, eh) } {
+    match unsafe { UnregisterWaitEx(wh, Some(eh)) } {
         Err(e) if e.code() == HRESULT::from(ERROR_IO_PENDING) => Ok(()),
         r => r,
     }
