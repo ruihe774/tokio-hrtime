@@ -7,11 +7,10 @@ use std::sync::Mutex;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-use windows::core::HRESULT;
-use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Threading::{
-    self, CreateEventW, CreateWaitableTimerExW, RegisterWaitForSingleObject, SetWaitableTimer,
-    UnregisterWaitEx, WaitForSingleObject, INFINITE,
+    self, CreateWaitableTimerExW, RegisterWaitForSingleObject, SetWaitableTimer, UnregisterWaitEx,
+    INFINITE,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,13 +86,7 @@ unsafe fn start_waitable_timer(wt: HANDLE, capsule: Pin<&Mutex<Capsule>>, onesho
 }
 
 fn destroy_waitable_timer(wt: HANDLE, wh: HANDLE) {
-    let eh = unsafe { CreateEventW(None, false, false, None) }.unwrap();
-    match unsafe { UnregisterWaitEx(wh, Some(eh)) } {
-        Err(e) if e.code() == HRESULT::from(ERROR_IO_PENDING) => Ok(()),
-        r => r,
-    }
-    .unwrap();
-    assert_eq!(unsafe { WaitForSingleObject(eh, INFINITE) }, WAIT_OBJECT_0);
+    unsafe { UnregisterWaitEx(wh, Some(INVALID_HANDLE_VALUE)) }.unwrap();
     unsafe { CloseHandle(wt) }.unwrap();
 }
 
